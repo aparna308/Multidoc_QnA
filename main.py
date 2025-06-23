@@ -1,58 +1,53 @@
-import streamlit as st
 import os
+import streamlit as st
 import PyPDF2
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQAWithSourcesChain
 
-# Set API key from Streamlit secrets
+# 1) Set API key—**must match exactly** 'openai_api_key' in Secrets
 os.environ["OPENAI_API_KEY"] = st.secrets["openai_api_key"]
 
 def read_pdf(files):
-    texts = []
-    sources = []
+    texts, sources = [], []
     for file in files:
-        reader = PyPDF2.PdfReader(file)
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text()
-            if text:
-                texts.append(text)
-                sources.append(f"{file.name}_page_{i}")
+        pdf = PyPDF2.PdfReader(file)
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
+            texts.append(text)
+            sources.append(f"{file.name}_page_{i}")
     return texts, sources
 
-st.set_page_config(layout="centered")
-st.title("📄 Multidoc Q&A")
+st.set_page_config(page_title="Multidoc Q&A", layout="centered")
+st.title("Multidoc Q&A")
 
-uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
+uploaded = st.file_uploader("Upload PDF(s)", type="pdf", accept_multiple_files=True)
+if uploaded:
+    st.write(f"📄 Loaded {len(uploaded)} PDF(s).")
+    docs, srcs = read_pdf(uploaded)
 
-if uploaded_files:
-    st.success(f"Loaded {len(uploaded_files)} file(s)")
-
-    texts, sources = read_pdf(uploaded_files)
-
-    # Load embeddings
+    # 2) Create embeddings with default constructor (langchain==0.0.145)
     embeddings = OpenAIEmbeddings()
 
-    # Create vector store
-    vectordb = Chroma.from_texts(texts, embeddings, metadatas=[{"source": s} for s in sources])
+    # 3) Build vector store
+    vectordb = Chroma.from_texts(docs, embeddings, metadatas=[{"source": s} for s in srcs])
     retriever = vectordb.as_retriever(search_kwargs={"k": 2})
 
-    # Load LLM
     llm = ChatOpenAI(model_name="gpt-3.5-turbo")
 
-    qa_chain = RetrievalQAWithSourcesChain.from_chain_type(llm=llm, retriever=retriever)
+    qa = RetrievalQAWithSourcesChain.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever)
 
-    query = st.text_input("Ask a question about the documents")
-
-    if st.button("Get Answer") and query:
+    query = st.text_input("Ask a question about your document:")
+    if query and st.button("Get Answer"):
         with st.spinner("Thinking..."):
             try:
-                result = qa_chain({"question": query})
+                ans = qa({"question": query})
                 st.subheader("Answer:")
-                st.write(result['answer'])
-
+                st.write(ans["answer"])
                 st.subheader("Sources:")
-                st.write(result['sources'])
+                st.write(ans["sources"])
             except Exception as e:
                 st.error(f"Error: {e}")
+else:
+    st.info("Upload at least one PDF to get started.")
