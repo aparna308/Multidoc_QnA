@@ -1,53 +1,73 @@
 import os
 import streamlit as st
-import PyPDF2
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
+from PyPDF2 import PdfReader
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain.text_splitter import CharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQAWithSourcesChain
+from langchain.chains import RetrievalQA
 
-# 1) Set API key—**must match exactly** 'openai_api_key' in Secrets
+# Set API key from secrets
 os.environ["OPENAI_API_KEY"] = st.secrets["openai_api_key"]
 
-def read_pdf(files):
-    texts, sources = [], []
-    for file in files:
-        pdf = PyPDF2.PdfReader(file)
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
-            texts.append(text)
-            sources.append(f"{file.name}_page_{i}")
-    return texts, sources
+# App layout
+st.set_page_config(page_title="MultiDoc Q&A", layout="centered")
+st.title("📄 Multi-Document Q&A")
+st.write("Upload one or more PDF or TXT files and ask questions about their content.")
 
-st.set_page_config(page_title="Multidoc Q&A", layout="centered")
-st.title("Multidoc Q&A")
+# Upload files
+uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
 
-uploaded = st.file_uploader("Upload PDF(s)", type="pdf", accept_multiple_files=True)
-if uploaded:
-    st.write(f"📄 Loaded {len(uploaded)} PDF(s).")
-    docs, srcs = read_pdf(uploaded)
+if uploaded_files:
+    raw_text = ""
+    sources = []
 
-    # 2) Create embeddings with default constructor (langchain==0.0.145)
-    embeddings = OpenAIEmbeddings()
+    for uploaded_file in uploaded_files:
+        filename = uploaded_file.name
 
-    # 3) Build vector store
-    vectordb = Chroma.from_texts(docs, embeddings, metadatas=[{"source": s} for s in srcs])
-    retriever = vectordb.as_retriever(search_kwargs={"k": 2})
+        if filename.endswith(".pdf"):
+            pdf = PdfReader(uploaded_file)
+            for page_num, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                if text:
+                    raw_text += text + "\n"
+                    sources.append(f"{filename}_page_{page_num}")
+        elif filename.endswith(".txt"):
+            text = uploaded_file.read().decode("utf-8")
+            raw_text += text + "\n"
+            sources.append(filename)
 
-    llm = ChatOpenAI(model_name="gpt-3.5-turbo")
+    if not raw_text.strip():
+        st.warning("No readable text found in the uploaded files.")
+        st.stop()
 
-    qa = RetrievalQAWithSourcesChain.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever)
+    # Split text
+    splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    docs = splitter.split_text(raw_text)
 
-    query = st.text_input("Ask a question about your document:")
-    if query and st.button("Get Answer"):
-        with st.spinner("Thinking..."):
-            try:
-                ans = qa({"question": query})
-                st.subheader("Answer:")
-                st.write(ans["answer"])
-                st.subheader("Sources:")
-                st.write(ans["sources"])
-            except Exception as e:
-                st.error(f"Error: {e}")
+    # Generate metadata
+    metadatas = [{"source": s} for s in sources for _ in range(len(docs) // len(sources))]
+
+    try:
+        embeddings = OpenAIEmbeddings()
+        vectordb = Chroma.from_texts(docs, embeddings, metadatas=metadatas)
+
+        retriever = vectordb.as_retriever(search_kwargs={"k": 3})
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0),
+            retriever=retriever,
+            return_source_documents=True
+        )
+
+        st.success("✅ Documents processed. Ask your question below.")
+        question = st.text_input("Enter your question:")
+
+        if question:
+            with st.spinner("Thinking..."):
+                result = qa_chain.run(question)
+                st.write("### 🤖 Answer:")
+                st.write(result)
+    except Exception as e:
+        st.error(f"Embedding or model error: {e}")
 else:
-    st.info("Upload at least one PDF to get started.")
+    st.info("Please upload some files to get started.")
