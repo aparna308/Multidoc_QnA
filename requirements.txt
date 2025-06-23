@@ -1,10 +1,8 @@
 streamlit
 PyPDF2
 faiss-cpu
-sentence-transformers
-huggingface-hub
 langchain>=0.1.14
-openai
+openai==0.28.0
 tiktoken
 typing-extensions>=4.5.0
 typing-inspect==0.8.0
