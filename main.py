@@ -1,73 +1,55 @@
 import os
 import streamlit as st
-from PyPDF2 import PdfReader
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain.text_splitter import CharacterTextSplitter
+import PyPDF2
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
 from langchain.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQA
+from langchain.chains import RetrievalQAWithSourcesChain
 
-# Set API key from secrets
+# Set API key
 os.environ["OPENAI_API_KEY"] = st.secrets["openai_api_key"]
 
-# App layout
-st.set_page_config(page_title="MultiDoc Q&A", layout="centered")
-st.title("📄 Multi-Document Q&A")
-st.write("Upload one or more PDF or TXT files and ask questions about their content.")
+st.set_page_config(page_title="Multidoc QnA", layout="centered")
+st.title("📄 Multidoc QnA")
 
-# Upload files
-uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
+# Read text from uploaded PDFs
+def read_text_from_files(files):
+    texts = []
+    sources = []
+    for file in files:
+        pdf = PyPDF2.PdfReader(file)
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text()
+            if text:
+                texts.append(text)
+                sources.append(f"{file.name}_page_{i}")
+    return texts, sources
+
+uploaded_files = st.file_uploader("Upload PDF files", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
-    raw_text = ""
-    sources = []
+    st.success(f"Loaded {len(uploaded_files)} files")
 
-    for uploaded_file in uploaded_files:
-        filename = uploaded_file.name
+    texts, sources = read_text_from_files(uploaded_files)
 
-        if filename.endswith(".pdf"):
-            pdf = PdfReader(uploaded_file)
-            for page_num, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                if text:
-                    raw_text += text + "\n"
-                    sources.append(f"{filename}_page_{page_num}")
-        elif filename.endswith(".txt"):
-            text = uploaded_file.read().decode("utf-8")
-            raw_text += text + "\n"
-            sources.append(filename)
+    embeddings = OpenAIEmbeddings()
+    vectordb = FAISS.from_texts(texts, embeddings, metadatas=[{"source": s} for s in sources])
 
-    if not raw_text.strip():
-        st.warning("No readable text found in the uploaded files.")
-        st.stop()
+    retriever = vectordb.as_retriever(search_kwargs={"k": 2})
+    llm = ChatOpenAI(model_name="gpt-3.5-turbo")
 
-    # Split text
-    splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    docs = splitter.split_text(raw_text)
+    qa_chain = RetrievalQAWithSourcesChain.from_chain_type(llm=llm, retriever=retriever)
 
-    # Generate metadata
-    metadatas = [{"source": s} for s in sources for _ in range(len(docs) // len(sources))]
-
-    try:
-        embeddings = OpenAIEmbeddings()
-        vectordb = Chroma.from_texts(docs, embeddings, metadatas=metadatas)
-
-        retriever = vectordb.as_retriever(search_kwargs={"k": 3})
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0),
-            retriever=retriever,
-            return_source_documents=True
-        )
-
-        st.success("✅ Documents processed. Ask your question below.")
-        question = st.text_input("Enter your question:")
-
-        if question:
+    query = st.text_input("Ask a question about your PDFs")
+    if query and st.button("Get Answer"):
+        try:
             with st.spinner("Thinking..."):
-                result = qa_chain.run(question)
-                st.write("### 🤖 Answer:")
-                st.write(result)
-    except Exception as e:
-        st.error(f"Embedding or model error: {e}")
+                result = qa_chain({"question": query}, return_only_outputs=True)
+                st.subheader("Answer:")
+                st.write(result["answer"])
+                st.subheader("Sources:")
+                st.write(result["sources"])
+        except Exception as e:
+            st.error(f"Error: {e}")
 else:
-    st.info("Please upload some files to get started.")
+    st.info("Please upload one or more PDF files.")
