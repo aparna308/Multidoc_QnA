@@ -1,40 +1,64 @@
 import streamlit as st
-from PyPDF2 import PdfReader
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.chains.question_answering import load_qa_chain
-from langchain.llms import OpenAI
 import os
+import pickle
 
-# Load your OpenAI API key from Streamlit secrets
-OPENAI_API_KEY = st.secrets["openai_api_key"]
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.vectorstores.faiss import FAISS
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chat_models import ChatOpenAI
+from langchain.chains.question_answering import load_qa_chain
 
-st.title("PDF Q&A with OpenAI (Legacy SDK)")
+# Setup your OpenAI API key in Streamlit secrets or env var
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else os.getenv("OPENAI_API_KEY")
 
-uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
+st.set_page_config(page_title="PDF Q&A with caching")
+
+st.title("PDF Q&A with Embeddings Cache")
+
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+
+CACHE_FILE = "embedding_cache.pkl"
 
 if uploaded_file:
-    pdf_reader = PdfReader(uploaded_file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text() or ""
+    # Load PDF docs
+    loader = PyPDFLoader(uploaded_file)
+    docs = loader.load()
 
-    if not text.strip():
-        st.error("No extractable text found in the PDF.")
-        st.stop()
+    # Split text into chunks (to keep embedding size manageable)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    texts = text_splitter.split_documents(docs)
 
-    # Split text into chunks for embeddings - very naive split here
-    texts = [text[i : i + 1000] for i in range(0, len(text), 1000)]
+    # Initialize embeddings
+    embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 
-    embeddings = OpenAIEmbeddings()
-    vectordb = FAISS.from_texts(texts, embeddings)
+    if os.path.exists(CACHE_FILE):
+        # Load cached vectorstore
+        with open(CACHE_FILE, "rb") as f:
+            vectordb = pickle.load(f)
+        st.success("Loaded embeddings from cache.")
+    else:
+        # Create vectorstore from embeddings
+        vectordb = FAISS.from_documents(texts, embeddings)
+        # Save cache to file
+        with open(CACHE_FILE, "wb") as f:
+            pickle.dump(vectordb, f)
+        st.success("Created new embeddings and cached.")
 
-    query = st.text_input("Ask a question about the PDF:")
+    query = st.text_input("Ask a question about the document:")
 
     if query:
-        llm = OpenAI(temperature=0)
+        # Load chat model (gpt-3.5-turbo)
+        llm = ChatOpenAI(model_name="gpt-3.5-turbo", openai_api_key=OPENAI_API_KEY, temperature=0)
+
+        # Get relevant docs
+        docs = vectordb.similarity_search(query, k=3)
+
+        # Load QA chain
         chain = load_qa_chain(llm, chain_type="stuff")
-        docs = vectordb.similarity_search(query, k=4)
+
+        # Run chain on docs and query
         answer = chain.run(input_documents=docs, question=query)
-        st.write("**Answer:**", answer)
+
+        st.markdown("### Answer:")
+        st.write(answer)
