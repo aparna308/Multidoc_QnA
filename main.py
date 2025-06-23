@@ -1,12 +1,12 @@
 import streamlit as st
 import os
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
 from langchain import OpenAI
 from langchain.chains import RetrievalQAWithSourcesChain
 import PyPDF2
 
-# Set OpenAI API key from Streamlit secrets (needed for langchain internals)
+# Set OpenAI API key from Streamlit secrets
 os.environ["OPENAI_API_KEY"] = st.secrets["openai_api_key"]
 
 def read_and_textify(files):
@@ -38,10 +38,9 @@ else:
 
     documents, sources = read_and_textify(uploaded_files)
 
-    # Initialize embeddings with correct parameter
-    embeddings = OpenAIEmbeddings(model_name="text-embedding-ada-002")
+    # Use the official LangChain embeddings class with model_name parameter
+    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
 
-    # Create vectorstore with metadata for sources
     vStore = Chroma.from_texts(documents, embeddings, metadatas=[{"source": s} for s in sources])
 
     model_name = "gpt-3.5-turbo"
