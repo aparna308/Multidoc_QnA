@@ -1,4 +1,5 @@
-streamlit
-langchain
-openai
+streamlit>=1.24.0
+langchain>=0.0.222
+openai>=0.27.0
 faiss-cpu
+pydantic>=1.10.7
