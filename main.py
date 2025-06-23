@@ -1,49 +1,40 @@
-import os
 import streamlit as st
-import PyPDF2
-
-from langchain.embeddings import HuggingFaceEmbeddings
+from PyPDF2 import PdfReader
+from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
-from langchain import OpenAI
-from langchain.chains import RetrievalQAWithSourcesChain
+from langchain.chains.question_answering import load_qa_chain
+from langchain.llms import OpenAI
+import os
 
-os.environ["OPENAI_API_KEY"] = st.secrets["openai_api_key"]
+# Load your OpenAI API key from Streamlit secrets
+OPENAI_API_KEY = st.secrets["openai_api_key"]
+os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-st.title("Multidoc QnA with GPT-4o-mini and HuggingFace Embeddings")
+st.title("PDF Q&A with OpenAI (Legacy SDK)")
 
-def read_text_from_pdfs(files):
-    texts, sources = [], []
-    for f in files:
-        pdf = PyPDF2.PdfReader(f)
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text()
-            if text:
-                texts.append(text)
-                sources.append(f"{f.name}_page_{i}")
-    return texts, sources
+uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
 
-uploaded_files = st.file_uploader("Upload PDF(s)", type=["pdf"], accept_multiple_files=True)
-if uploaded_files:
-    st.success(f"Loaded {len(uploaded_files)} file(s)")
-    docs, metadatas = read_text_from_pdfs(uploaded_files)
+if uploaded_file:
+    pdf_reader = PdfReader(uploaded_file)
+    text = ""
+    for page in pdf_reader.pages:
+        text += page.extract_text() or ""
 
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    vectordb = FAISS.from_texts(docs, embeddings, metadatas=[{"source": m} for m in metadatas])
-    retriever = vectordb.as_retriever(search_kwargs={"k": 2})
+    if not text.strip():
+        st.error("No extractable text found in the PDF.")
+        st.stop()
 
-    llm = OpenAI(model_name="gpt-4o-mini", temperature=0)
-    qa = RetrievalQAWithSourcesChain.from_chain_type(llm=llm, retriever=retriever)
+    # Split text into chunks for embeddings - very naive split here
+    texts = [text[i : i + 1000] for i in range(0, len(text), 1000)]
 
-    query = st.text_input("Ask your question:")
+    embeddings = OpenAIEmbeddings()
+    vectordb = FAISS.from_texts(texts, embeddings)
+
+    query = st.text_input("Ask a question about the PDF:")
+
     if query:
-        with st.spinner("Generating answer..."):
-            try:
-                result = qa({"question": query}, return_only_outputs=True)
-                st.subheader("Answer")
-                st.write(result["answer"])
-                st.subheader("Sources")
-                st.write(result["sources"])
-            except Exception as e:
-                st.error(f"Error generating answer: {e}")
-else:
-    st.info("Upload PDF files to start.")
+        llm = OpenAI(temperature=0)
+        chain = load_qa_chain(llm, chain_type="stuff")
+        docs = vectordb.similarity_search(query, k=4)
+        answer = chain.run(input_documents=docs, question=query)
+        st.write("**Answer:**", answer)
