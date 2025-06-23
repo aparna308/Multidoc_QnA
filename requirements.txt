@@ -2,9 +2,9 @@ streamlit
 PyPDF2
 openai
 tiktoken
-chromadb
 langchain>=0.1.14
 langchain-community
-typing-extensions>=4.5.0
+faiss-cpu
 typing-inspect==0.8.0
+typing-extensions>=4.5.0
 protobuf==3.20.3
