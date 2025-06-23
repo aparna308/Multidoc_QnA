@@ -19,12 +19,13 @@ def main():
         loader = PyPDFLoader(tmp_file_path)
         docs = loader.load()
 
-        api_key = os.getenv("OPENAI_API_KEY")
-        embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+        # IMPORTANT: Do NOT pass openai_api_key here,
+        # make sure OPENAI_API_KEY is set in your environment before running this app.
+        embeddings = OpenAIEmbeddings()
 
         vectordb = FAISS.from_documents(docs, embeddings)
 
-        chat = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, openai_api_key=api_key)
+        chat = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
 
         qa = RetrievalQA.from_chain_type(llm=chat, retriever=vectordb.as_retriever())
 
