@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain import OpenAI
 from langchain.chains import RetrievalQAWithSourcesChain
@@ -13,13 +13,17 @@ def read_and_textify(files):
     text_list = []
     sources_list = []
     for file in files:
-        pdfReader = PyPDF2.PdfReader(file)
-        for i in range(len(pdfReader.pages)):
-            pageObj = pdfReader.pages[i]
-            text = pageObj.extract_text()
-            pageObj.clear()
+        if file.type == "application/pdf":
+            pdfReader = PyPDF2.PdfReader(file)
+            for i, page in enumerate(pdfReader.pages):
+                text = page.extract_text()
+                text_list.append(text)
+                sources_list.append(f"{file.name}_page_{i}")
+        else:
+            # For txt files, just read content
+            text = file.read().decode("utf-8")
             text_list.append(text)
-            sources_list.append(f"{file.name}_page_{i}")
+            sources_list.append(file.name)
     return text_list, sources_list
 
 st.set_page_config(layout="centered", page_title="Multidoc_QnA")
@@ -32,35 +36,42 @@ uploaded_files = st.file_uploader(
 st.write("---")
 
 if not uploaded_files:
-    st.info("Upload files to analyse")
+    st.info("Upload files to analyze")
 else:
-    st.write(f"{len(uploaded_files)} document(s) loaded..")
+    st.write(f"{len(uploaded_files)} document(s) loaded...")
 
     documents, sources = read_and_textify(uploaded_files)
 
-    # Use the official LangChain embeddings class with model_name parameter
-    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
+    # Initialize embeddings without model param (uses default text-embedding-ada-002)
+    embeddings = OpenAIEmbeddings()
 
-    vStore = Chroma.from_texts(documents, embeddings, metadatas=[{"source": s} for s in sources])
+    # Create vector store with metadata
+    vstore = Chroma.from_texts(documents, embeddings, metadatas=[{"source": s} for s in sources])
 
-    model_name = "gpt-3.5-turbo"
-    retriever = vStore.as_retriever()
-    retriever.search_kwargs = {"k": 2}
+    retriever = vstore.as_retriever(search_kwargs={"k": 2})
 
-    llm = OpenAI(model_name=model_name, streaming=True)
-    model = RetrievalQAWithSourcesChain.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever)
+    # Initialize LLM - specify your model here if you want
+    llm = OpenAI(model_name="gpt-3.5-turbo", streaming=True)
+
+    # Setup retrieval QA chain
+    qa_chain = RetrievalQAWithSourcesChain.from_chain_type(
+        llm=llm, chain_type="stuff", retriever=retriever
+    )
 
     st.header("Ask your data")
-    user_q = st.text_area("Enter your questions here")
+    user_question = st.text_area("Enter your question here")
 
     if st.button("Get Response"):
-        try:
-            with st.spinner("Model is working on it..."):
-                result = model({"question": user_q}, return_only_outputs=True)
-                st.subheader("Your response:")
-                st.write(result["answer"])
-                st.subheader("Source pages:")
-                st.write(result["sources"])
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
-            st.error("Oops, the GPT response resulted in an error :( Please try again with a different question.")
+        if not user_question.strip():
+            st.warning("Please enter a question before submitting.")
+        else:
+            with st.spinner("Thinking..."):
+                try:
+                    response = qa_chain({"question": user_question}, return_only_outputs=True)
+                    st.subheader("Response:")
+                    st.write(response["answer"])
+                    st.subheader("Source(s):")
+                    st.write(response["sources"])
+                except Exception as e:
+                    st.error(f"An error occurred: {e}")
+                    st.error("Please try again with a different question.")
