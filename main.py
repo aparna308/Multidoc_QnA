@@ -1,5 +1,6 @@
 import streamlit as st
 import tempfile
+import os
 from langchain.document_loaders import PyPDFLoader
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
@@ -11,23 +12,20 @@ def main():
 
     uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
     if uploaded_file is not None:
-        # Save to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(uploaded_file.getbuffer())
             tmp_file_path = tmp_file.name
 
-        # Load documents from PDF
         loader = PyPDFLoader(tmp_file_path)
         docs = loader.load()
 
-        # Initialize embeddings and vectorstore
-        embeddings = OpenAIEmbeddings()
+        api_key = os.getenv("OPENAI_API_KEY")
+        embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+
         vectordb = FAISS.from_documents(docs, embeddings)
 
-        # Initialize Chat model
-        chat = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+        chat = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, openai_api_key=api_key)
 
-        # Setup retrieval QA chain
         qa = RetrievalQA.from_chain_type(llm=chat, retriever=vectordb.as_retriever())
 
         query = st.text_input("Ask a question about the document:")
