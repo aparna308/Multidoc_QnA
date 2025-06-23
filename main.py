@@ -1,12 +1,13 @@
+import os
 import streamlit as st
-from langchain.embeddings import OpenAIEmbeddings
+import PyPDF2
+
+from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQAWithSourcesChain
-import PyPDF2
-import os
 
-# Set OpenAI API key environment variable from Streamlit secrets
+# Set API key from Streamlit secrets into env variable
 os.environ["OPENAI_API_KEY"] = st.secrets["openai_api_key"]
 
 def read_and_textify(files):
@@ -25,23 +26,19 @@ def read_and_textify(files):
             sources.append(file.name)
     return texts, sources
 
-st.set_page_config(layout="centered", page_title="Multidoc_QnA")
-st.header("Multidoc_QnA")
+st.set_page_config(page_title="Multidoc_QnA", layout="centered")
+st.title("Multidoc_QnA")
 st.write("---")
 
-uploaded_files = st.file_uploader("Upload documents", accept_multiple_files=True, type=["pdf", "txt"])
-st.write("---")
+uploaded_files = st.file_uploader("Upload PDF or TXT files", accept_multiple_files=True, type=["pdf", "txt"])
 
-if not uploaded_files:
-    st.info("Upload files to analyse")
-else:
-    st.write(f"{len(uploaded_files)} document(s) loaded..")
+if uploaded_files:
+    st.write(f"Loaded {len(uploaded_files)} files")
+    docs, metadatas = read_and_textify(uploaded_files)
 
-    documents, sources = read_and_textify(uploaded_files)
+    embeddings = OpenAIEmbeddings()
 
-    embeddings = OpenAIEmbeddings()  # uses OPENAI_API_KEY from env
-
-    vectordb = Chroma.from_texts(documents, embeddings, metadatas=[{"source": s} for s in sources])
+    vectordb = Chroma.from_texts(docs, embeddings, metadatas=[{"source": s} for s in metadatas])
 
     retriever = vectordb.as_retriever(search_kwargs={"k": 2})
 
@@ -49,17 +46,18 @@ else:
 
     qa_chain = RetrievalQAWithSourcesChain.from_chain_type(llm=llm, retriever=retriever, chain_type="stuff")
 
-    st.header("Ask your data")
-    user_query = st.text_area("Enter your questions here")
+    st.header("Ask a question about your documents")
+    query = st.text_area("Enter your question here")
 
     if st.button("Get Response"):
         try:
-            with st.spinner("Model is working on it..."):
-                result = qa_chain({"question": user_query}, return_only_outputs=True)
-                st.subheader("Your response:")
-                st.write(result["answer"])
-                st.subheader("Source pages:")
-                st.write(result["sources"])
+            with st.spinner("Thinking..."):
+                response = qa_chain({"question": query}, return_only_outputs=True)
+                st.subheader("Answer:")
+                st.write(response["answer"])
+                st.subheader("Sources:")
+                st.write(response["sources"])
         except Exception as e:
-            st.error(f"An error occurred: {e}")
-            st.error("Please try again with a different question.")
+            st.error(f"Error: {e}")
+else:
+    st.info("Please upload PDF or TXT files to start.")
